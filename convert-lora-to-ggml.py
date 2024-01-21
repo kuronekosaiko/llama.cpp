@@ -46,6 +46,14 @@ def write_tensor_header(fout: BinaryIO, name: str, shape: Sequence[int], data_ty
     fout.seek((fout.tell() + 31) & -32)
 
 
+def get_pattern_value(name: str, pattern: dict[str, int], fallback_value: int) -> int:
+    if pattern is not None:
+        for pattern_name, pattern_value in pattern.items():
+            if pattern_name in name:
+                return int(pattern_value)
+    return int(fallback_value)
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(f"Usage: python {sys.argv[0]} <path> [arch]")
@@ -97,6 +105,16 @@ if __name__ == '__main__':
         print("Error: param modules_to_save is not supported")
         sys.exit(1)
 
+    # This is a hack to add support for alpha_pattern and rank_pattern
+    # in which we need to disable lora_r and lora_alpha scaling by setting both to 1
+    # and scale each lora_A.weight individually by `alpha_pattern / rank_pattern`
+    if params["alpha_pattern"] is not None or params["rank_pattern"] is not None:
+        orig_r = params["r"]
+        orig_alpha = params["lora_alpha"]
+        require_scale = True
+        params["r"] = 1
+        params["lora_alpha"] = 1
+
     with open(output_path, "wb") as fout:
         fout.truncate()
 
@@ -113,6 +131,11 @@ if __name__ == '__main__':
                 v = v.T
             else:
                 v = v.float()
+            if require_scale and k.endswith("lora_A.weight"):
+                weight_r = get_pattern_value(orig_k, params["rank_pattern"], orig_r)
+                weight_alpha = get_pattern_value(orig_k, params["alpha_pattern"], orig_alpha)
+                scalar = weight_alpha / weight_r
+                v = v * scalar
 
             t = v.detach().numpy()
 
